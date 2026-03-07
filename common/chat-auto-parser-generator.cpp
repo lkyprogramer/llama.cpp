@@ -50,6 +50,10 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     // Build grammar if tools are present
     bool has_tools =
         autoparser.tools.format.mode != tool_format::NONE && inputs.tools.is_array() && !inputs.tools.empty();
+    bool has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+    data.qwen3_reasoning_fallback =
+        autoparser.qwen3_reasoning_fallback && !has_tools && !has_response_format &&
+        inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE && inputs.enable_thinking;
     std::string trigger_marker = !autoparser.tools.format.section_start.empty() ? autoparser.tools.format.section_start :
                                                                                 autoparser.tools.format.per_call_start;
     bool        include_grammar =

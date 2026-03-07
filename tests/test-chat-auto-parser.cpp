@@ -60,6 +60,7 @@ static void test_nemotron_tool_format(testing & t);
 // CohereForAI template analysis tests
 static void test_cohere_reasoning_detection(testing & t);
 static void test_cohere_analysis(testing & t);
+static void test_qwen3_reasoning_fallback_detection(testing & t);
 
 // Marker separation
 static void test_marker_separation(testing & t);
@@ -94,6 +95,7 @@ int main(int argc, char * argv[]) {
     t.test("segments", test_marker_separation);
     t.test("seed_oss_diffs", test_seed_oss_tool_analysis);
     t.test("cohere", test_cohere_analysis);
+    t.test("qwen3_reasoning_fallback", test_qwen3_reasoning_fallback_detection);
     t.test("nemotron", test_nemotron_analysis);
     t.test("standard_json_tools", test_standard_json_tools_formats);
     t.test("normalize_quotes_to_json", test_normalize_quotes_to_json);
@@ -1340,6 +1342,16 @@ static common_chat_template load_cohere_template(testing & t) {
     return load_template(t, "models/templates/CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja");
 }
 
+static void test_qwen3_reasoning_fallback_detection(testing & t) {
+    common_chat_template tmpl = load_template(t, "models/templates/Qwen-Qwen3-0.6B.jinja");
+
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+
+    t.assert_true("Qwen3 template should enable qwen3 reasoning fallback", analysis.qwen3_reasoning_fallback);
+    t.assert_true("Qwen3 template should expose reasoning markers", analysis.reasoning.mode != reasoning_mode::NONE);
+}
+
 static void test_cohere_analysis(testing & t) {
     t.test("Cohere reasoning detection", test_cohere_reasoning_detection);
 }
@@ -1886,4 +1898,3 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
         }
     }
 }
-

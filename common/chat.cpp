@@ -66,6 +66,135 @@ static bool has_content_or_tool_calls(const common_chat_msg & msg) {
     return !msg.content.empty() || !msg.tool_calls.empty();
 }
 
+static std::string trim_left_chars(const std::string & input, const char * chars) {
+    const auto pos = input.find_first_not_of(chars);
+    return pos == std::string::npos ? "" : input.substr(pos);
+}
+
+static std::string trim_right_chars(const std::string & input, const char * chars) {
+    const auto pos = input.find_last_not_of(chars);
+    return pos == std::string::npos ? "" : input.substr(0, pos + 1);
+}
+
+static size_t find_first_of(const std::string & input, const std::vector<std::string> & needles) {
+    size_t found = std::string::npos;
+    for (const auto & needle : needles) {
+        const auto pos = input.find(needle);
+        if (pos == std::string::npos) {
+            continue;
+        }
+        found = found == std::string::npos ? pos : std::min(found, pos);
+    }
+    return found;
+}
+
+static size_t find_qwen3_inferred_content_boundary(const std::string & input) {
+    static const std::vector<std::string> answer_markers = {
+        "\n# ",
+        "\n## ",
+        "\n### ",
+        "\nFinal Answer",
+        "\n**Final Answer",
+        "\nRecommended Fix",
+        "\n## Recommendation",
+        "\n## Recommended Fix",
+        "\nThe smallest production-safe fix",
+        "\nThe minimal fix",
+        "\nHere is the minimal fix",
+        "\nHere is a concise",
+    };
+
+    return find_first_of(input, answer_markers);
+}
+
+static bool looks_like_qwen3_reasoning_only(const std::string & input) {
+    static const std::vector<std::string> reasoning_prefixes = {
+        "Thinking Process:",
+        "Here's a thinking process",
+        "The user wants me to ",
+        "I need to ",
+        "1.  **Analyze the Request:**",
+        "1. **Analyze the Request:**",
+    };
+
+    for (const auto & prefix : reasoning_prefixes) {
+        if (string_starts_with(input, prefix)) {
+            return true;
+        }
+    }
+
+    if (input.find("\n1.  **Analyze the Request:**") != std::string::npos &&
+        input.find("\n2.  **") != std::string::npos) {
+        return true;
+    }
+
+    return false;
+}
+
+static bool should_try_qwen3_reasoning_fallback(const std::string & input,
+                                                const common_chat_parser_params & params) {
+    if (params.reasoning_format == COMMON_REASONING_FORMAT_NONE) {
+        return false;
+    }
+
+    return params.qwen3_reasoning_fallback ||
+           input.find("</think>") != std::string::npos ||
+           find_qwen3_inferred_content_boundary(input) != std::string::npos ||
+           looks_like_qwen3_reasoning_only(input);
+}
+
+static common_chat_msg common_chat_parse_qwen3_reasoning_fallback(const std::string &               input,
+                                                                  bool                              is_partial,
+                                                                  const common_chat_parser_params & params) {
+    static constexpr std::string_view close_tag = "</think>";
+    static constexpr std::string_view open_tag  = "<think>";
+
+    common_chat_msg msg;
+    msg.role = "assistant";
+
+    const auto first_close = input.find(close_tag);
+    if (first_close == std::string::npos) {
+        if (is_partial || params.streaming) {
+            msg.reasoning_content = input;
+            return msg;
+        }
+
+        const auto inferred_boundary = find_qwen3_inferred_content_boundary(input);
+        if (inferred_boundary != std::string::npos) {
+            msg.reasoning_content = trim_right_chars(input.substr(0, inferred_boundary), "\r\n");
+            msg.content           = trim_left_chars(input.substr(inferred_boundary), "\r\n");
+            return msg;
+        }
+
+        if (looks_like_qwen3_reasoning_only(input)) {
+            msg.reasoning_content = input;
+            return msg;
+        }
+
+        msg.content = input;
+        return msg;
+    }
+
+    const auto last_close = input.rfind(close_tag);
+
+    std::string reasoning = input.substr(0, first_close);
+    std::string content   = input.substr(last_close + close_tag.size());
+
+    if (!is_partial && !params.streaming) {
+        const auto last_open = reasoning.rfind(open_tag);
+        if (last_open != std::string::npos) {
+            reasoning = reasoning.substr(last_open + open_tag.size());
+        }
+        reasoning = trim_left_chars(reasoning, "\r\n");
+        reasoning = trim_right_chars(reasoning, "\r\n");
+        content   = trim_left_chars(content, "\r\n");
+    }
+
+    msg.reasoning_content = reasoning;
+    msg.content           = content;
+    return msg;
+}
+
 json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
     if (!content.empty() && !content_parts.empty()) {
         throw std::runtime_error("Cannot specify both content and content_parts");
@@ -1508,7 +1637,16 @@ common_chat_params common_chat_templates_apply(const struct common_chat_template
 common_chat_msg common_chat_parse(const std::string &               input,
                                   bool                              is_partial,
                                   const common_chat_parser_params & params) {
-    return common_chat_peg_parse(params.parser, input, is_partial, params);
+    try {
+        return common_chat_peg_parse(params.parser, input, is_partial, params);
+    } catch (const std::runtime_error & e) {
+        if (string_starts_with(e.what(), "Failed to parse input at pos ") &&
+            should_try_qwen3_reasoning_fallback(input, params)) {
+            LOG_DBG("%s: falling back to reasoning split after parse failure: %s\n", __func__, e.what());
+            return common_chat_parse_qwen3_reasoning_fallback(input, is_partial, params);
+        }
+        throw;
+    }
 }
 
 common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_parser,
@@ -1571,4 +1709,3 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
     GGML_ASSERT(chat_templates->template_default != nullptr);
     return chat_templates->template_default->caps.to_map();
 }
-
