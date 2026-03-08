@@ -1094,6 +1094,7 @@ json oaicompat_chat_params_parse(
     llama_params["grammar_triggers"] = grammar_triggers;
     llama_params["preserved_tokens"] = chat_params.preserved_tokens;
     llama_params["thinking_forced_open"]     = chat_params.thinking_forced_open;
+    llama_params["qwen3_reasoning_fallback"] = chat_params.qwen3_reasoning_fallback;
     for (const auto & stop : chat_params.additional_stops) {
         llama_params["stop"].push_back(stop);
     }

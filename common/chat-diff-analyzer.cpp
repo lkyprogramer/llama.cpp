@@ -40,6 +40,13 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               LOG_DBG(ANSI_ORANGE "[Patch: old Qwen/Deepseek thinking template]\n" ANSI_RESET);
           }
       },
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("message.content.split('</think>')") != std::string::npos &&
+              tmpl.src.find("enable_thinking is defined and enable_thinking is false") != std::string::npos) {
+              analysis.qwen3_reasoning_fallback = true;
+              LOG_DBG(ANSI_ORANGE "[Patch: Qwen3 reasoning fallback]\n" ANSI_RESET);
+          }
+      },
       // Granite 3.3, with separate reasoning and content markers
       [](const common_chat_template & tmpl, autoparser & analysis) -> void {
           if (tmpl.src.find("Write your thoughts between <think></think> and write your response between "
@@ -170,6 +177,7 @@ void autoparser::analyze_template(const common_chat_template & tmpl) {
     LOG_DBG("reasoning_mode: %s\n", mode_to_str(reasoning.mode).c_str());
     LOG_DBG("reasoning_start: '%s'\n", reasoning.start.c_str());
     LOG_DBG("reasoning_end: '%s'\n", reasoning.end.c_str());
+    LOG_DBG("qwen3_reasoning_fallback: %s\n", qwen3_reasoning_fallback ? "true" : "false");
     LOG_DBG("content_mode: %s\n", mode_to_str(content.mode).c_str());
     LOG_DBG("content_start: '%s'\n", content.start.c_str());
     LOG_DBG("content_end: '%s'\n", content.end.c_str());

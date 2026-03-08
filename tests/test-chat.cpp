@@ -874,12 +874,6 @@ static void test_templates(const struct common_chat_templates *  tmpls,
     user_message.role    = "user";
     user_message.content = "Hello, world!";
 
-    common_chat_templates_inputs inputs_tools;
-    inputs_tools.messages = { message_user };
-    inputs_tools.tools    = { special_function_tool };
-
-    common_chat_params params = common_chat_templates_apply(tmpls, inputs_tools);
-
     for (const auto & tool_choice :
          std::vector<common_chat_tool_choice>{ COMMON_CHAT_TOOL_CHOICE_AUTO, COMMON_CHAT_TOOL_CHOICE_REQUIRED }) {
         auto data = init_delta(tmpls, end_tokens, user_message, test_message, tools, tool_choice);
@@ -893,13 +887,8 @@ static void test_templates(const struct common_chat_templates *  tmpls,
 
         if (expect_grammar_triggered) {
             // TODO @ngxson : refactor common_chat_parse to avoid passing format/reasoning_format every time
-            common_chat_parser_params parser_params;
-            parser_params.format           = data.params.format;
+            common_chat_parser_params parser_params(data.params);
             parser_params.reasoning_format = reasoning_format;
-            if (!parser_params.parser.empty()) {
-                parser_params.parser = common_peg_arena();
-                parser_params.parser.load(params.parser);
-            }
             const auto msg = common_chat_parse(data.delta, /* is_partial= */ false, parser_params);
             assert_msg_equals(test_message, msg, ignore_whitespace_differences);
         }
@@ -1052,6 +1041,144 @@ static void test_parser_with_streaming(const common_chat_msg & expected, const s
     assert_msg_equals(expected, merged, true);
 }
 
+static void test_qwen3_reasoning_fallback(bool detailed_debug) {
+    static const std::string explicit_close = R"(Thinking Process:
+
+1.  **Analyze the Request:** The user is asking a simple arithmetic question: "What is 2+2?"
+
+2.  **Identify the Core Task:** Perform the addition of 2 and 2.
+
+3.  **Calculate:** 2 + 2 = 4.
+
+4.  **Formulate the Output:** State the answer clearly and concisely.
+
+5.  **Review:** Is there any trick or context? No, it's a straightforward math question.
+
+6.  **Final Answer:** 4.cw
+</think>
+
+2 + 2 equals **4**.)";
+
+    static const std::string missing_close = R"(Here's a thinking process that leads to the suggested fix:
+
+1.  **Analyze the Request:**
+    *   **Input:** A Java method snippet: `public String url(Config c){return c.getDb().getUrl();}`
+    *   **Task:** Review the method and provide the *smallest production-safe null handling fix*.
+    *   **Constraints:** "Smallest" (minimal code change), "Production-safe" (handles potential `NullPointerException`s gracefully or explicitly), "Null handling" (focus on null checks).
+
+2.  **Analyze the Code:**
+    *   `public String url(Config c)`: Takes a `Config` object.
+    *   `return c.getDb().getUrl();`: Chains method calls.
+    *   **Potential Null Points:**
+        1.  `c` itself could be `null`.
+        2.  `c.getDb()` could return `null`.
+        3.  `c.getDb().getUrl()` could return `null` (though this is usually acceptable for a `String` return type, unless the contract says otherwise).
+
+3.  **Evaluate "Production-Safe":**
+    *   In production, throwing a)";
+
+    static const std::string missing_close_with_answer = R"(The user wants me to review this Java method and provide the smallest production-safe null handling fix.
+
+I should first identify the null risks:
+1. `c` may be null.
+2. `c.getDb()` may be null.
+
+# Smallest Production-Safe Null Handling Fix
+
+```java
+public String url(Config c) {
+    return c != null && c.getDb() != null ? c.getDb().getUrl() : null;
+}
+```)";
+
+    auto tmpls = read_templates("models/templates/Qwen-Qwen3-0.6B.jinja");
+
+    common_chat_templates_inputs inputs;
+    inputs.messages              = { message_user };
+    inputs.add_generation_prompt = true;
+    inputs.enable_thinking       = true;
+    inputs.reasoning_format      = COMMON_REASONING_FORMAT_AUTO;
+
+    const auto params = common_chat_templates_apply(tmpls.get(), inputs);
+    assert_equals(true, params.qwen3_reasoning_fallback);
+
+    common_chat_parser_params parser_params(params);
+    parser_params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    parser_params.debug            = detailed_debug;
+    parser_params.parse_tool_calls = false;
+
+    auto parser_params_disabled = parser_params;
+    parser_params_disabled.qwen3_reasoning_fallback = false;
+
+    const auto explicit_msg   = common_chat_parse(explicit_close, /* is_partial= */ false, parser_params);
+
+    common_chat_msg explicit_expected;
+    explicit_expected.role = "assistant";
+    explicit_expected.reasoning_content =
+        "Thinking Process:\n\n"
+        "1.  **Analyze the Request:** The user is asking a simple arithmetic question: \"What is 2+2?\"\n\n"
+        "2.  **Identify the Core Task:** Perform the addition of 2 and 2.\n\n"
+        "3.  **Calculate:** 2 + 2 = 4.\n\n"
+        "4.  **Formulate the Output:** State the answer clearly and concisely.\n\n"
+        "5.  **Review:** Is there any trick or context? No, it's a straightforward math question.\n\n"
+        "6.  **Final Answer:** 4.cw";
+    explicit_expected.content = "2 + 2 equals **4**.";
+    assert_msg_equals(explicit_expected, explicit_msg, /* ignore_whitespace_differences= */ true);
+
+    const auto non_stream_msg = common_chat_parse(missing_close, /* is_partial= */ false, parser_params);
+    common_chat_msg non_stream_expected;
+    non_stream_expected.role              = "assistant";
+    non_stream_expected.reasoning_content = missing_close;
+    assert_msg_equals(non_stream_expected, non_stream_msg, /* ignore_whitespace_differences= */ false);
+
+    const auto split_msg = common_chat_parse(missing_close_with_answer, /* is_partial= */ false, parser_params);
+    common_chat_msg split_expected;
+    split_expected.role = "assistant";
+    split_expected.reasoning_content =
+        "The user wants me to review this Java method and provide the smallest production-safe null handling fix.\n\n"
+        "I should first identify the null risks:\n"
+        "1. `c` may be null.\n"
+        "2. `c.getDb()` may be null.";
+    split_expected.content =
+        "# Smallest Production-Safe Null Handling Fix\n\n"
+        "```java\n"
+        "public String url(Config c) {\n"
+        "    return c != null && c.getDb() != null ? c.getDb().getUrl() : null;\n"
+        "}\n"
+        "```";
+    assert_msg_equals(split_expected, split_msg, /* ignore_whitespace_differences= */ false);
+
+    try {
+        (void) common_chat_parse(missing_close_with_answer, /* is_partial= */ false, parser_params_disabled);
+        throw std::runtime_error("Expected parse failure without qwen3 reasoning fallback");
+    } catch (const std::runtime_error & e) {
+        if (!string_starts_with(e.what(), "Failed to parse input at pos ")) {
+            throw;
+        }
+    }
+
+    auto streaming_params = parser_params;
+    streaming_params.streaming = true;
+
+    const auto streaming_msg = common_chat_parse(missing_close, /* is_partial= */ false, streaming_params);
+    common_chat_msg streaming_expected;
+    streaming_expected.role              = "assistant";
+    streaming_expected.reasoning_content = missing_close;
+    assert_msg_equals(streaming_expected, streaming_msg, /* ignore_whitespace_differences= */ false);
+
+    const auto partial_input = missing_close.substr(0, std::min<size_t>(missing_close.size(), 240));
+    const auto partial_msg   = common_chat_parse(partial_input, /* is_partial= */ true, streaming_params);
+    auto diffs = common_chat_msg_diff::compute_diffs(partial_msg, streaming_msg);
+
+    common_chat_msg merged = partial_msg;
+    for (const auto & diff : diffs) {
+        merged.reasoning_content += diff.reasoning_content_delta;
+        merged.content += diff.content_delta;
+    }
+
+    assert_msg_equals(streaming_msg, merged, /* ignore_whitespace_differences= */ false);
+}
+
 // Use for PEG parser implementations
 struct peg_test_case {
     common_chat_templates_inputs params;
@@ -1074,10 +1201,10 @@ struct make_peg_parser {
     }
 
     common_chat_msg parse(const std::string & msg, bool is_partial) const {
-        common_chat_parser_params parser_params;
-        parser_params.format = params_.format;
-        parser_params.debug = detailed_debug_;
-        return common_chat_peg_parse(arena_, msg, is_partial, parser_params);
+        common_chat_parser_params parser_params(params_);
+        parser_params.debug  = detailed_debug_;
+        parser_params.parser = arena_;
+        return common_chat_parse(msg, is_partial, parser_params);
     }
 };
 
@@ -1738,6 +1865,9 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         tst.test("Hello, world!").expect(simple_assist_msg("Hello, world!")).run();
     }
+
+    test_qwen3_reasoning_fallback(detailed_debug);
+
     {
         // NousResearch-Hermes-2-Pro and Hermes-3 (tool calling models)
         auto tst = peg_tester("models/templates/NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja", detailed_debug);

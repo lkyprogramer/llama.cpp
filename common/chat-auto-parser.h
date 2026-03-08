@@ -370,6 +370,7 @@ struct autoparser {
     analyze_reasoning    reasoning;
     analyze_content      content;
     analyze_tools        tools;
+    bool                 qwen3_reasoning_fallback = false;
     bool                 analysis_complete = false;
 
     // Preserved tokens for tokenizer (union of all non-empty markers)

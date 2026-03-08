@@ -212,6 +212,7 @@ struct common_chat_params {
     std::string                         grammar;
     bool                                grammar_lazy         = false;
     bool                                thinking_forced_open = false;
+    bool                                qwen3_reasoning_fallback = false;
     bool                                supports_thinking    = false;
     std::vector<common_grammar_trigger> grammar_triggers;
     std::vector<std::string>            preserved_tokens;
@@ -226,7 +227,9 @@ struct common_chat_parser_params {
     common_reasoning_format reasoning_format     = COMMON_REASONING_FORMAT_NONE; // TODO: refactor this to "bool parse_reasoning"
     // Whether reasoning_content should be inlined in the content (e.g. for reasoning_format=deepseek in stream mode)
     bool                    reasoning_in_content = false;
+    bool                    streaming            = false;
     bool                    thinking_forced_open = false;
+    bool                    qwen3_reasoning_fallback = false;
     bool                    parse_tool_calls     = true;
     bool                    debug                = false;  // Enable debug output for PEG parser
     common_peg_arena        parser               = {};
@@ -234,6 +237,10 @@ struct common_chat_parser_params {
     common_chat_parser_params(const common_chat_params & chat_params) {
         format               = chat_params.format;
         thinking_forced_open = chat_params.thinking_forced_open;
+        qwen3_reasoning_fallback = chat_params.qwen3_reasoning_fallback;
+        if (!chat_params.parser.empty()) {
+            parser.load(chat_params.parser);
+        }
     }
 };
 
