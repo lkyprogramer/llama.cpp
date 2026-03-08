@@ -137,8 +137,11 @@ static bool should_try_qwen3_reasoning_fallback(const std::string & input,
         return false;
     }
 
-    return params.qwen3_reasoning_fallback ||
-           input.find("</think>") != std::string::npos ||
+    if (!params.qwen3_reasoning_fallback) {
+        return false;
+    }
+
+    return input.find("</think>") != std::string::npos ||
            find_qwen3_inferred_content_boundary(input) != std::string::npos ||
            looks_like_qwen3_reasoning_only(input);
 }

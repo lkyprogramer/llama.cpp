@@ -1107,6 +1107,9 @@ public String url(Config c) {
     parser_params.debug            = detailed_debug;
     parser_params.parse_tool_calls = false;
 
+    auto parser_params_disabled = parser_params;
+    parser_params_disabled.qwen3_reasoning_fallback = false;
+
     const auto explicit_msg   = common_chat_parse(explicit_close, /* is_partial= */ false, parser_params);
 
     common_chat_msg explicit_expected;
@@ -1144,6 +1147,15 @@ public String url(Config c) {
         "}\n"
         "```";
     assert_msg_equals(split_expected, split_msg, /* ignore_whitespace_differences= */ false);
+
+    try {
+        (void) common_chat_parse(missing_close_with_answer, /* is_partial= */ false, parser_params_disabled);
+        throw std::runtime_error("Expected parse failure without qwen3 reasoning fallback");
+    } catch (const std::runtime_error & e) {
+        if (!string_starts_with(e.what(), "Failed to parse input at pos ")) {
+            throw;
+        }
+    }
 
     auto streaming_params = parser_params;
     streaming_params.streaming = true;
